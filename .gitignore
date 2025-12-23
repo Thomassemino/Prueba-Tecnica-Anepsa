@@ -1,6 +1,9 @@
 .env
 .claude/
 resumen_ventas_mensual.csv
+*.db
+*.sqlite
+*.sqlite3
 
 __pycache__/
 *.py[cod]

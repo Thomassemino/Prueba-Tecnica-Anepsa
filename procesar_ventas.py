@@ -4,8 +4,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
-import psycopg2
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import sqlite3
 from dotenv import load_dotenv
 import schedule
 import time
@@ -23,61 +22,19 @@ class ProcesadorVentas:
     def __init__(self):
         load_dotenv()
 
-        self.host_base_datos = os.getenv('DB_HOST')
-        self.puerto_base_datos = os.getenv('DB_PORT')
-        self.nombre_base_datos = os.getenv('DB_NAME')
-        self.usuario_base_datos = os.getenv('DB_USER')
-        self.contrasena_base_datos = os.getenv('DB_PASSWORD')
+        ruta_base_datos = os.getenv('DB_PATH', 'anepsa_ventas.db')
+        self.ruta_base_datos = Path(__file__).parent / ruta_base_datos
 
         self.ruta_archivo_csv_entrada = Path(__file__).parent / "Archivo ventas_simuladas.csv"
         self.ruta_archivo_csv_salida = Path(__file__).parent / "resumen_ventas_mensual.csv"
         self.nombre_tabla = "ventas_raw"
 
-    def crear_base_datos_si_no_existe(self):
-        logger.info("Verificando existencia de base de datos")
-
-        try:
-            conexion = psycopg2.connect(
-                host=self.host_base_datos,
-                port=self.puerto_base_datos,
-                user=self.usuario_base_datos,
-                password=self.contrasena_base_datos,
-                database='postgres'
-            )
-            conexion.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-            cursor = conexion.cursor()
-
-            cursor.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s",
-                (self.nombre_base_datos,)
-            )
-            existe_base_datos = cursor.fetchone()
-
-            if not existe_base_datos:
-                logger.info(f"Creando base de datos '{self.nombre_base_datos}'")
-                cursor.execute(f"CREATE DATABASE {self.nombre_base_datos}")
-                logger.info(f"Base de datos '{self.nombre_base_datos}' creada exitosamente")
-            else:
-                logger.info(f"Base de datos '{self.nombre_base_datos}' ya existe")
-
-            cursor.close()
-            conexion.close()
-
-        except psycopg2.Error as error:
-            logger.error(f"Error al crear base de datos: {error}")
-            raise
-
     def obtener_conexion(self):
         try:
-            conexion = psycopg2.connect(
-                host=self.host_base_datos,
-                port=self.puerto_base_datos,
-                database=self.nombre_base_datos,
-                user=self.usuario_base_datos,
-                password=self.contrasena_base_datos
-            )
+            conexion = sqlite3.connect(self.ruta_base_datos)
+            logger.info(f"Conexión a base de datos SQLite establecida: {self.ruta_base_datos}")
             return conexion
-        except psycopg2.Error as error:
+        except sqlite3.Error as error:
             logger.error(f"Error al conectar a la base de datos: {error}")
             raise
 
@@ -86,11 +43,11 @@ class ProcesadorVentas:
 
         consulta_crear_tabla = f"""
         CREATE TABLE IF NOT EXISTS {self.nombre_tabla} (
-            fecha DATE NOT NULL,
-            region VARCHAR(50) NOT NULL,
-            producto VARCHAR(100) NOT NULL,
+            fecha TEXT NOT NULL,
+            region TEXT NOT NULL,
+            producto TEXT NOT NULL,
             cantidad INTEGER NOT NULL,
-            precio_unitario DECIMAL(10, 2) NOT NULL
+            precio_unitario REAL NOT NULL
         )
         """
 
@@ -100,7 +57,7 @@ class ProcesadorVentas:
             conexion.commit()
             logger.info(f"Tabla '{self.nombre_tabla}' verificada/creada exitosamente")
             cursor.close()
-        except psycopg2.Error as error:
+        except sqlite3.Error as error:
             logger.error(f"Error al crear tabla: {error}")
             conexion.rollback()
             raise
@@ -110,11 +67,11 @@ class ProcesadorVentas:
 
         try:
             cursor = conexion.cursor()
-            cursor.execute(f"TRUNCATE TABLE {self.nombre_tabla}")
+            cursor.execute(f"DELETE FROM {self.nombre_tabla}")
             conexion.commit()
             logger.info("Tabla limpiada exitosamente")
             cursor.close()
-        except psycopg2.Error as error:
+        except sqlite3.Error as error:
             logger.error(f"Error al limpiar tabla: {error}")
             conexion.rollback()
             raise
@@ -145,7 +102,7 @@ class ProcesadorVentas:
             consulta_insercion = f"""
             INSERT INTO {self.nombre_tabla}
             (fecha, region, producto, cantidad, precio_unitario)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?)
             """
 
             registros_insertados = 0
@@ -167,7 +124,7 @@ class ProcesadorVentas:
             logger.info(f"Insertados {registros_insertados} registros en la base de datos")
             cursor.close()
 
-        except psycopg2.Error as error:
+        except sqlite3.Error as error:
             logger.error(f"Error al insertar datos: {error}")
             conexion.rollback()
             raise
@@ -177,8 +134,8 @@ class ProcesadorVentas:
 
         consulta_eliminar_duplicados = f"""
         DELETE FROM {self.nombre_tabla}
-        WHERE ctid NOT IN (
-            SELECT MIN(ctid)
+        WHERE rowid NOT IN (
+            SELECT MIN(rowid)
             FROM {self.nombre_tabla}
             GROUP BY fecha, region, producto, cantidad, precio_unitario
         )
@@ -194,7 +151,7 @@ class ProcesadorVentas:
 
             return cantidad_duplicados_eliminados
 
-        except psycopg2.Error as error:
+        except sqlite3.Error as error:
             logger.error(f"Error al eliminar duplicados: {error}")
             conexion.rollback()
             raise
@@ -221,7 +178,7 @@ class ProcesadorVentas:
 
             return cantidad_nulos_eliminados
 
-        except psycopg2.Error as error:
+        except sqlite3.Error as error:
             logger.error(f"Error al eliminar registros nulos: {error}")
             conexion.rollback()
             raise
@@ -232,8 +189,8 @@ class ProcesadorVentas:
         consulta_resumen = f"""
         SELECT
             region,
-            EXTRACT(YEAR FROM fecha) as año,
-            EXTRACT(MONTH FROM fecha) as mes,
+            CAST(strftime('%Y', fecha) AS INTEGER) as año,
+            CAST(strftime('%m', fecha) AS INTEGER) as mes,
             SUM(cantidad * precio_unitario) as total_ventas
         FROM {self.nombre_tabla}
         GROUP BY region, año, mes
@@ -243,8 +200,6 @@ class ProcesadorVentas:
         try:
             dataframe_resumen = pd.read_sql_query(consulta_resumen, conexion)
 
-            dataframe_resumen['año'] = dataframe_resumen['año'].astype(int)
-            dataframe_resumen['mes'] = dataframe_resumen['mes'].astype(int)
             dataframe_resumen['total_ventas'] = dataframe_resumen['total_ventas'].round(2)
 
             cantidad_registros_resumen = len(dataframe_resumen)
@@ -279,10 +234,7 @@ class ProcesadorVentas:
         hora_inicio = datetime.now()
 
         try:
-            self.crear_base_datos_si_no_existe()
-
             conexion = self.obtener_conexion()
-            logger.info("Conexión a base de datos establecida exitosamente")
 
             self.crear_tabla_si_no_existe(conexion)
 
