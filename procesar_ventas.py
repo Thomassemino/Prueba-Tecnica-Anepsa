@@ -26,7 +26,7 @@ class ProcesadorVentas:
         self.ruta_base_datos = Path(__file__).parent / ruta_base_datos
 
         self.ruta_archivo_csv_entrada = Path(__file__).parent / "Archivo ventas_simuladas.csv"
-        self.ruta_archivo_csv_salida = Path(__file__).parent / "resumen_ventas_mensual.csv"
+        self.ruta_archivo_excel_salida = Path(__file__).parent / "resumen_ventas_mensual.xlsx"
         self.nombre_tabla = "ventas_raw"
 
     def obtener_conexion(self):
@@ -211,15 +211,30 @@ class ProcesadorVentas:
             logger.error(f"Error al calcular resumen: {error}")
             raise
 
-    def exportar_resumen_a_csv(self, dataframe_resumen):
-        logger.info(f"Exportando resumen a '{self.ruta_archivo_csv_salida}'")
+    def exportar_resumen_a_excel(self, dataframe_resumen):
+        logger.info(f"Exportando resumen a '{self.ruta_archivo_excel_salida}'")
 
         try:
-            dataframe_resumen.to_csv(
-                self.ruta_archivo_csv_salida,
+            from openpyxl import load_workbook
+            from openpyxl.styles import PatternFill, Font
+
+            dataframe_resumen.to_excel(
+                self.ruta_archivo_excel_salida,
                 index=False,
-                encoding='utf-8'
+                engine='openpyxl'
             )
+
+            workbook = load_workbook(self.ruta_archivo_excel_salida)
+            worksheet = workbook.active
+
+            color_encabezado = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            fuente_encabezado = Font(bold=True, color="FFFFFF")
+
+            for celda in worksheet[1]:
+                celda.fill = color_encabezado
+                celda.font = fuente_encabezado
+
+            workbook.save(self.ruta_archivo_excel_salida)
             logger.info("Resumen exportado exitosamente")
 
         except Exception as error:
@@ -250,7 +265,7 @@ class ProcesadorVentas:
 
             dataframe_resumen = self.calcular_resumen_ventas(conexion)
 
-            self.exportar_resumen_a_csv(dataframe_resumen)
+            self.exportar_resumen_a_excel(dataframe_resumen)
 
             conexion.close()
             logger.info("Conexión a base de datos cerrada")

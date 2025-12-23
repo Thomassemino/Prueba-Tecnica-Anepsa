@@ -1,6 +1,7 @@
 .env
 .claude/
 resumen_ventas_mensual.csv
+resumen_ventas_mensual.xlsx
 *.db
 *.sqlite
 *.sqlite3
